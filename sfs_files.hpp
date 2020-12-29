@@ -199,7 +199,6 @@ public:
 
         fh = std::fopen(disk_path.c_str(), "wb");
         if (nullptr != buf) {
-            // std::cout << "xd\n";
             write(buf, size, 0);
         }
         close();
@@ -210,7 +209,6 @@ public:
     }
 
     inline void open() {
-        //std::cout << "open()?\n";
         assert(nullptr == fh);
         fh = std::fopen(disk_path.c_str(), "rb+");
         assert(NULL != fh);
@@ -218,7 +216,6 @@ public:
     }
 
     inline void close() {
-        //std::cout << "close()?\n";
         assert(nullptr != fh);
         assert(0 == std::fclose(fh));
         fh = nullptr;
@@ -240,7 +237,6 @@ public:
         } else {
             new_bytes += (off - file_size + size);
         }
-        //std::cout << "_current_offset1: " << _current_offset << '\n';
 
         if (0 != _current_offset || 0 != off) {
             assert(0 == std::fseek(fh, off, SEEK_SET));
@@ -249,46 +245,27 @@ public:
         assert(size == nbytes);
         _fuse_param.attr.st_size += new_bytes;
         _current_offset = off + size;
-        //std::cout << "_current_offset2: " << _current_offset << '\n';
+
         return nbytes;
     }
 
     IOFile::BufferView read(size_t size, off_t off) {
         assert(nullptr != fh);
         if (-1 == size) {
-            // assert(0 == std::fseek(fh, 0, SEEK_END));
-            // size = std::ftell(fh);
-            // assert(-1 != size);
-            // assert(0 == std::fseek(fh, 0, SEEK_SET));
-
-            // we might use ftell, but it requires IO...
-            //std::cout << "123" << '\n';
             size = _fuse_param.attr.st_size;
             off = 0;
         }
-        //std::cout << "_current_offset3: " << _current_offset << '\n';
-        //std::cout << "size3: " << size << '\n';
 
         if (0 != _current_offset || 0 != off) {
-            //std::cout << "123sd\n";
             assert(0 == std::fseek(fh, off, SEEK_SET));
             _current_offset = off;
         }
         char *buf = new char[size];  // it will be removed by BufferView
 
         size_t nbytes = std::fread(buf, sizeof(char), size, fh);
-
-        // if (0 == nbytes) {
-        //     if (std::feof(fh)) {
-        //         std::cout << "eof\n";
-        //     } else if (std::ferror(fh)) {
-        //         std::cout << "ferror\n";
-        //     }
-        // }
-
         _current_offset = off + nbytes;
-
         assert(0 != nbytes);
+
         return IOFile::BufferView(buf, nbytes, true);
     }
 

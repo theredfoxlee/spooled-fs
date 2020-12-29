@@ -3,8 +3,6 @@
 // This header describes files used by SpooledFS.
 
 
-#include <iostream>  // todo: remove
-
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -180,8 +178,8 @@ private:
 class DiskFile: public IOFile {
     // DiskFile wraps f<methods> for regular filesystem (e.g. ext4).
 private:
-    std::FILE *fh;
-    std::filesystem::path disk_path;
+    std::FILE *_fh;
+    std::filesystem::path _disk_path;
 
     off_t _current_offset;
 
@@ -189,15 +187,15 @@ public:
     DiskFile() = delete;
     DiskFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode,
              const char *buf = nullptr, size_t size = 0)
-        : IOFile(fuse_path, fuse_inode, mode, 0), fh(nullptr), disk_path(), _current_offset(0) {
+        : IOFile(fuse_path, fuse_inode, mode, 0), _fh(nullptr), _disk_path(), _current_offset(0) {
 
-        // set disk_path to /tmp/<hash>
-        disk_path = std::filesystem::temp_directory_path()
+        // set _disk_path to /tmp/<hash>
+        _disk_path = std::filesystem::temp_directory_path()
             / std::to_string(std::filesystem::hash_value(fuse_path));
-        std::filesystem::remove(disk_path);
-        // assert(!std::filesystem::exists(disk_path));
+        std::filesystem::remove(_disk_path);
+        // assert(!std::filesystem::exists(_disk_path));
 
-        fh = std::fopen(disk_path.c_str(), "wb");
+        _fh = std::fopen(_disk_path.c_str(), "wb");
         if (nullptr != buf) {
             write(buf, size, 0);
         }
@@ -205,25 +203,25 @@ public:
     }
 
     ~DiskFile() {
-        std::filesystem::remove(disk_path);
+        std::filesystem::remove(_disk_path);
     }
 
     inline void open() {
-        assert(nullptr == fh);
-        fh = std::fopen(disk_path.c_str(), "rb+");
-        assert(NULL != fh);
-        assert(nullptr != fh);
+        assert(nullptr == _fh);
+        _fh = std::fopen(_disk_path.c_str(), "rb+");
+        assert(NULL != _fh);
+        assert(nullptr != _fh);
     }
 
     inline void close() {
-        assert(nullptr != fh);
-        assert(0 == std::fclose(fh));
-        fh = nullptr;
+        assert(nullptr != _fh);
+        assert(0 == std::fclose(_fh));
+        _fh = nullptr;
         _current_offset = 0;
     }
 
     size_t write(const char *buf, size_t size, off_t off) {
-        assert(nullptr != fh);
+        assert(nullptr != _fh);
 
         const size_t file_size = _fuse_param.attr.st_size;
         size_t new_bytes = 0;
@@ -239,9 +237,9 @@ public:
         }
 
         if (0 != _current_offset || 0 != off) {
-            assert(0 == std::fseek(fh, off, SEEK_SET));
+            assert(0 == std::fseek(_fh, off, SEEK_SET));
         }
-        size_t nbytes = std::fwrite(buf, sizeof(char), size, fh);
+        size_t nbytes = std::fwrite(buf, sizeof(char), size, _fh);
         assert(size == nbytes);
         _fuse_param.attr.st_size += new_bytes;
         _current_offset = off + size;
@@ -250,19 +248,19 @@ public:
     }
 
     IOFile::BufferView read(size_t size, off_t off) {
-        assert(nullptr != fh);
+        assert(nullptr != _fh);
         if (-1 == size) {
             size = _fuse_param.attr.st_size;
             off = 0;
         }
 
         if (0 != _current_offset || 0 != off) {
-            assert(0 == std::fseek(fh, off, SEEK_SET));
+            assert(0 == std::fseek(_fh, off, SEEK_SET));
             _current_offset = off;
         }
         char *buf = new char[size];  // it will be removed by BufferView
 
-        size_t nbytes = std::fread(buf, sizeof(char), size, fh);
+        size_t nbytes = std::fread(buf, sizeof(char), size, _fh);
         _current_offset = off + nbytes;
         assert(0 != nbytes);
 
@@ -274,7 +272,7 @@ private:
         stream << "DiskFile(fuse_path=\""
                << _fuse_path
                << "\",disk_path="
-               << disk_path
+               << _disk_path
                << ",fuse_inode="
                << _fuse_inode
                << ",size="

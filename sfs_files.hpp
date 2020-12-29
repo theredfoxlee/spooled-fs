@@ -3,6 +3,11 @@
 // This header describes files used by SpooledFS.
 
 
+#include <iostream>  // todo: remove
+
+#include <cstdio>
+#include <filesystem>
+#include <memory>
 #include <ostream>
 #include <string>
 
@@ -48,16 +53,21 @@ public:
 
     // stream representation of a file
     friend std::ostream &operator<<(std::ostream &stream, const BaseFile &file) {
-        stream << "BaseFile(fuse_path=\""
-               << file._fuse_path 
-               << "\",fuse_inode="
-               << file._fuse_inode
-               << ",size="
-               << file._fuse_param.attr.st_size
-               << ",mode="
-               << file._fuse_param.attr.st_mode
-               << ")";
+        file.to_stream(stream);
         return stream;
+    }
+
+private:
+    virtual void to_stream(std::ostream &stream) const {
+        stream << "BaseFile(fuse_path=\""
+               << _fuse_path
+               << "\",fuse_inode="
+               << _fuse_inode
+               << ",size="
+               << _fuse_param.attr.st_size
+               << ",mode="
+               << _fuse_param.attr.st_mode
+               << ")";
     }
 };
 
@@ -110,10 +120,8 @@ private:
 
 public:
     MemoryFile() = delete;
-    MemoryFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode)
-        : IOFile(fuse_path, fuse_inode, mode, 0), _blob() {}
     MemoryFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode,
-               const char *buf, size_t size)
+               const char *buf = nullptr, size_t size = 0)
         : IOFile(fuse_path, fuse_inode, mode, size), _blob(buf, size) {}
 
     size_t write(const char *buf, size_t size, off_t off) {
@@ -153,6 +161,150 @@ public:
             off = 0;
         }
         return IOFile::BufferView(_blob.c_str() + off, size, false);
+    }
+
+private:
+    virtual void to_stream(std::ostream &stream) const {
+        stream << "MemoryFile(fuse_path=\""
+               << _fuse_path
+               << "\",fuse_inode="
+               << _fuse_inode
+               << ",size="
+               << _fuse_param.attr.st_size
+               << ",mode="
+               << _fuse_param.attr.st_mode
+               << ")";
+    }
+};
+
+class DiskFile: public IOFile {
+    // DiskFile wraps f<methods> for regular filesystem (e.g. ext4).
+private:
+    std::FILE *fh;
+    std::filesystem::path disk_path;
+
+    off_t _current_offset;
+
+public:
+    DiskFile() = delete;
+    DiskFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode,
+             const char *buf = nullptr, size_t size = 0)
+        : IOFile(fuse_path, fuse_inode, mode, 0), fh(nullptr), disk_path(), _current_offset(0) {
+
+        // set disk_path to /tmp/<hash>
+        disk_path = std::filesystem::temp_directory_path()
+            / std::to_string(std::filesystem::hash_value(fuse_path));
+        std::filesystem::remove(disk_path);
+        // assert(!std::filesystem::exists(disk_path));
+
+        fh = std::fopen(disk_path.c_str(), "wb");
+        if (nullptr != buf) {
+            // std::cout << "xd\n";
+            write(buf, size, 0);
+        }
+        close();
+    }
+
+    ~DiskFile() {
+        std::filesystem::remove(disk_path);
+    }
+
+    inline void open() {
+        //std::cout << "open()?\n";
+        assert(nullptr == fh);
+        fh = std::fopen(disk_path.c_str(), "rb+");
+        assert(NULL != fh);
+        assert(nullptr != fh);
+    }
+
+    inline void close() {
+        //std::cout << "close()?\n";
+        assert(nullptr != fh);
+        assert(0 == std::fclose(fh));
+        fh = nullptr;
+        _current_offset = 0;
+    }
+
+    size_t write(const char *buf, size_t size, off_t off) {
+        assert(nullptr != fh);
+
+        const size_t file_size = _fuse_param.attr.st_size;
+        size_t new_bytes = 0;
+
+        if (off < file_size) {
+            if (off + size <= file_size) {
+                // no new_bytes
+            } else {
+                new_bytes += (size - (file_size - off));
+            }
+        } else {
+            new_bytes += (off - file_size + size);
+        }
+        //std::cout << "_current_offset1: " << _current_offset << '\n';
+
+        if (0 != _current_offset || 0 != off) {
+            assert(0 == std::fseek(fh, off, SEEK_SET));
+        }
+        size_t nbytes = std::fwrite(buf, sizeof(char), size, fh);
+        assert(size == nbytes);
+        _fuse_param.attr.st_size += new_bytes;
+        _current_offset = off + size;
+        //std::cout << "_current_offset2: " << _current_offset << '\n';
+        return nbytes;
+    }
+
+    IOFile::BufferView read(size_t size, off_t off) {
+        assert(nullptr != fh);
+        if (-1 == size) {
+            // assert(0 == std::fseek(fh, 0, SEEK_END));
+            // size = std::ftell(fh);
+            // assert(-1 != size);
+            // assert(0 == std::fseek(fh, 0, SEEK_SET));
+
+            // we might use ftell, but it requires IO...
+            //std::cout << "123" << '\n';
+            size = _fuse_param.attr.st_size;
+            off = 0;
+        }
+        //std::cout << "_current_offset3: " << _current_offset << '\n';
+        //std::cout << "size3: " << size << '\n';
+
+        if (0 != _current_offset || 0 != off) {
+            //std::cout << "123sd\n";
+            assert(0 == std::fseek(fh, off, SEEK_SET));
+            _current_offset = off;
+        }
+        char *buf = new char[size];  // it will be removed by BufferView
+
+        size_t nbytes = std::fread(buf, sizeof(char), size, fh);
+
+        // if (0 == nbytes) {
+        //     if (std::feof(fh)) {
+        //         std::cout << "eof\n";
+        //     } else if (std::ferror(fh)) {
+        //         std::cout << "ferror\n";
+        //     }
+        // }
+
+        _current_offset = off + nbytes;
+
+        assert(0 != nbytes);
+        return IOFile::BufferView(buf, nbytes, true);
+    }
+
+private:
+    void to_stream(std::ostream &stream) const {
+        stream << "DiskFile(fuse_path=\""
+               << _fuse_path
+               << "\",disk_path="
+               << disk_path
+               << ",fuse_inode="
+               << _fuse_inode
+               << ",size="
+               << _fuse_param.attr.st_size
+               << ",mode="
+               << _fuse_param.attr.st_mode
+               << ")";
     }
 };
 

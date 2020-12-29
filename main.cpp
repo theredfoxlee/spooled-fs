@@ -23,6 +23,8 @@ int
 main() {
     sfs::MemoryFile x("/hello", 15, S_IFREG | 0666, "123", 3);
     sfs::DiskFile y("/hello", 15, S_IFREG | 0666, "123", 3);
+    sfs::SpoolFile z("/hello", 15, S_IFREG | 0666, "123", 3);
+    z.spool_size = 3; 
     sfs::MemoryFile x1("/hello1", 15, S_IFREG | 0666);
     sfs::DiskFile y1("/hello1", 15, S_IFREG | 0666);
     sfs::MemoryFile x2("/hello2", 15, S_IFREG | 0666, "1234", 4);
@@ -32,6 +34,7 @@ main() {
 
     test_io_file(&x);
     test_io_file(&y);
+    test_io_file(&z);
     test_io_file(&x1);
     test_io_file(&y1);
     test_io_file(&x2);

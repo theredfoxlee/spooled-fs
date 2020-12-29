@@ -3,6 +3,7 @@
 // This header describes files used by SpooledFS.
 
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -45,9 +46,16 @@ public:
         _fuse_param.attr.st_ctim = now;
     }
 
-    inline const std::string & get_fuse_path() { return _fuse_path; }
-    inline fuse_ino_t get_fuse_inode() { return _fuse_inode; }
-    inline const struct fuse_entry_param & get_fuse_param() { return _fuse_param; }
+    inline const std::string & get_fuse_path() const { return _fuse_path; }
+    inline fuse_ino_t get_fuse_inode() const { return _fuse_inode; }
+    inline const struct fuse_entry_param & get_fuse_param() const { return _fuse_param; }
+
+    inline size_t get_size() const { return _fuse_param.attr.st_size; }
+    inline mode_t get_mode() const { return _fuse_param.attr.st_mode; }
+
+    inline bool is_file() const { return S_ISREG(_fuse_param.attr.st_mode); }
+    inline bool is_dir() const { return S_ISDIR(_fuse_param.attr.st_mode); }
+    inline bool is_link() const { return S_ISLNK(_fuse_param.attr.st_mode); }
 
     // stream representation of a file
     friend std::ostream &operator<<(std::ostream &stream, const BaseFile &file) {
@@ -55,9 +63,44 @@ public:
         return stream;
     }
 
-private:
     virtual void to_stream(std::ostream &stream) const {
         stream << "BaseFile(fuse_path=\""
+               << _fuse_path
+               << "\",fuse_inode="
+               << _fuse_inode
+               << ",size="
+               << _fuse_param.attr.st_size
+               << ",mode="
+               << _fuse_param.attr.st_mode
+               << ")";
+    }
+};
+
+class DirFile: public BaseFile {
+    // DirFile represents a directory.
+private:
+    // This might be optimized in the future with pointers instead of strings.
+    std::vector<std::string> _fuse_paths;
+
+public:
+    DirFile() = delete;
+    DirFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode)
+        : BaseFile(fuse_path, fuse_inode, mode, 4096) {}
+
+    inline const std::vector<std::string> & get_paths() const { return _fuse_paths; }
+
+    inline void add_path(const std::string &fuse_path) { _fuse_paths.push_back(fuse_path); }
+    inline bool remove_path(const std::string &fuse_path) {
+        auto iter = std::find(_fuse_paths.begin(), _fuse_paths.end(), fuse_path);
+        if (_fuse_paths.end() == iter) {
+            _fuse_paths.erase(iter);
+            return true;
+        }
+        return false;
+    }
+
+    void to_stream(std::ostream &stream) const {
+        stream << "DirFile(fuse_path=\""
                << _fuse_path
                << "\",fuse_inode="
                << _fuse_inode
@@ -161,7 +204,6 @@ public:
         return IOFile::BufferView(_blob.c_str() + off, size, false);
     }
 
-private:
     virtual void to_stream(std::ostream &stream) const {
         stream << "MemoryFile(fuse_path=\""
                << _fuse_path
@@ -267,7 +309,6 @@ public:
         return IOFile::BufferView(buf, nbytes, true);
     }
 
-private:
     void to_stream(std::ostream &stream) const {
         stream << "DiskFile(fuse_path=\""
                << _fuse_path
@@ -280,6 +321,68 @@ private:
                << ",mode="
                << _fuse_param.attr.st_mode
                << ")";
+    }
+};
+
+class SpoolFile: public IOFile {
+    // SpoolFile is a context which picks one of IOFile (strategies)
+    // - it's either MemoryFile or DiskFile; based on file size.
+public:
+    size_t spool_size = 1024;
+
+private:
+    IOFile *_strategy = nullptr;
+    bool _spooled = false;
+
+public:
+    SpoolFile() = delete;
+    SpoolFile(const std::string &fuse_path, fuse_ino_t fuse_inode, mode_t mode,
+                const char *buf = nullptr, size_t size = 0):
+                IOFile(fuse_path, fuse_inode, mode, size) {
+        if (size > spool_size) {
+            _strategy = new DiskFile(fuse_path, fuse_inode, mode, buf, size);
+            _spooled = true;
+        } else {
+            _strategy = new MemoryFile(fuse_path, fuse_inode, mode, buf, size);
+        }
+    }
+
+    inline void open() { _strategy->open(); }
+    inline void close() { _strategy->close(); }
+
+    inline size_t write(const char *buf, size_t size, off_t off) {
+        size_t nbytes = _strategy->write(buf, size, off);
+
+        if (!_spooled && _strategy->get_size() > spool_size) {
+            IOFile::BufferView view = _strategy->read(-1, 0);
+            IOFile *new_strategy = new DiskFile(
+                _strategy->get_fuse_path(),
+                _strategy->get_fuse_inode(),
+                _strategy->get_mode(),
+                view.get_buf(),
+                view.get_size()
+            );
+            new_strategy->open();
+            delete _strategy;
+            _strategy = new_strategy;
+            _spooled = true;
+        }
+
+        return nbytes;
+    }
+
+    IOFile::BufferView read(size_t size, off_t off) {
+        return _strategy->read(size, off);
+    }
+
+    ~SpoolFile() {
+        delete _strategy;
+    }
+
+    void to_stream(std::ostream &stream) const {
+        stream << "SpoolFile[";
+        _strategy->to_stream(stream);
+        stream << "]";
     }
 };
 

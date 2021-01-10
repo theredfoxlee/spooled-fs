@@ -9,27 +9,120 @@
 #include <fuse3/fuse_lowlevel.h>
 
 
+static SpooledFS sfs;
+
+
+static void
+sfs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
+    DirFile *directory = (DirFile *) sfs.get_by_inode(parent);
+
+    if (nullptr == directory) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    BaseFile *file = directory.find_file_by_name(name);
+
+    if (nullptr == param) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    fuse_reply_entry(req, &file->get_fuse_param());
+}
+
+static void
+sfs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    BaseFile *file = sfs.get_by_inode(ino);
+
+    if (nullptr == file) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    fuse_reply_entry(req, &file->get_fuse_param());
+}
+
+static void
+sfs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    IOFile *file = (IOFile *) sfs.get_by_inode(ino);
+
+    if (nullptr == file) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    file->open();
+
+    fuse_reply_open(req, fi);
+}
+
+static void
+sfs_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    IOFile *file = (IOFile *) sfs.get_by_inode(ino);
+
+    if (nullptr == file) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    file->close();
+}
+
+static void
+sfs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+    IOFile *file = (IOFile *) sfs.get_by_inode(ino);
+
+    if (nullptr == file) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    BufferView buffer_view = file->read(size, off);
+
+    fuse_reply_buf(req, buffer_view.get_buf(), buffer_view.get_size());
+}
+
+static void
+sfs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
+    IOFile *file = (IOFile *) sfs.get_by_inode(ino);
+
+    if (nullptr == file) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    size_t nbytes = file->write(buf, size, off);
+
+    fuse_reply_write(req, nbytes);
+}
+
+static void
+sfs_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi) {
+    sfs.create_file(parent, name, mode); // ???
+}
+
 void
 sfs_init_callbacks(struct fuse_lowlevel_ops *ops) {
     ops->init = NULL;
     ops->destroy = NULL;
-    ops->lookup = NULL;     // TODO: implement
-    ops->forget = NULL;     // TODO: implement
-    ops->getattr = NULL;    // TODO: implement
+    ops->lookup = sfs_lookup;
+    ops->forget = NULL;
+    ops->getattr = sfs_getattr;
     ops->setattr = NULL;
-    ops->readlink = NULL;   // TODO: implement
+    ops->readlink = NULL;
     ops->mknod = NULL;
-    ops->mkdir = NULL;      // TODO: implement
-    ops->unlink = NULL;     // TODO: implement
-    ops->rmdir = NULL;      // TODO: implement
-    ops->symlink = NULL;    // TODO: implement
-    ops->rename = NULL;     // TODO: implement
+    ops->mkdir = NULL;
+    ops->unlink = NULL;
+    ops->rmdir = NULL;
+    ops->symlink = NULL;
+    ops->rename = NULL;
     ops->link = NULL;
-    ops->open = NULL;
-    ops->read = NULL;
-    ops->write = NULL;
+    ops->open = sfs_open;
+    ops->read = sfs_read;
+    ops->write = sfs_write;
     ops->flush = NULL;
-    ops->release = NULL;
+    ops->release = sfs_release;
     ops->fsync = NULL;
     ops->opendir = NULL;
     ops->readdir = NULL;
